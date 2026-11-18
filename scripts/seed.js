@@ -1,10 +1,14 @@
 /**
  * Seed script for Firebase Firestore
  * Run with: node scripts/seed.js
+ *
+ * Seeds ONLY the access codes needed for login.
+ * Words and quotes are NOT pre-created: the database contains
+ * only items that users actually register.
  */
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import * as dotenv from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 
@@ -36,17 +40,10 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 const ACCESS_CODES = ['konoyaro', 'monin', 'urusai'];
-const SAMPLE_WORDS = ['バカ', 'アホ', 'ハゲ', '神', '天才', 'ゆちゆち'];
-const SAMPLE_QUOTES = [
-  '諦めたらそこで試合終了ですよ',
-  '努力は必ず報われる',
-  '事件は会議室で起きてるんじゃない',
-];
 
 async function seed() {
   console.log('--- Initializing Firestore for KONOYARO SLOT ---');
 
-  // 1. access_codes
   console.log('1. Setting up access codes...');
   for (const code of ACCESS_CODES) {
     await setDoc(doc(db, 'access_codes', code), {
@@ -57,40 +54,7 @@ async function seed() {
     console.log(`   - Access code added: ${code}`);
   }
 
-  // 2. konoyaro_words
-  console.log('2. Setting up sample konoyaro words...');
-  for (const word of SAMPLE_WORDS) {
-    const q = query(collection(db, 'konoyaro_words'), where('word', '==', word));
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      await addDoc(collection(db, 'konoyaro_words'), {
-        word,
-        createdBy: 'system',
-        createdAt: serverTimestamp(),
-      });
-      console.log(`   - Word added: ${word}`);
-    } else {
-      console.log(`   - Word already exists: ${word}`);
-    }
-  }
-
-  // 3. quotes
-  console.log('3. Setting up sample quotes...');
-  for (const text of SAMPLE_QUOTES) {
-    const q = query(collection(db, 'quotes'), where('text', '==', text));
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      await addDoc(collection(db, 'quotes'), {
-        text,
-        createdBy: 'system',
-        createdAt: serverTimestamp(),
-      });
-      console.log(`   - Quote added: ${text}`);
-    } else {
-      console.log(`   - Quote already exists: ${text}`);
-    }
-  }
-
+  console.log('Words/quotes are not seeded: only user-registered items are stored.');
   console.log('Firestore seed completed successfully!');
   process.exit(0);
 }

@@ -2,6 +2,8 @@ export interface User {
   username: string;
   tp: number;
   createdAt: any;
+  passwordHash?: string;
+  hasPassword?: boolean;
 }
 
 export interface KonoyaroWord {

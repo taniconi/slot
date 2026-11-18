@@ -124,7 +124,7 @@ export const KonoyaroRegisterScreen: React.FC<KonoyaroRegisterScreenProps> = ({
             onChange={(e) => setWord(e.target.value)}
             maxLength={10}
             placeholder="入力してね"
-            className="flex-1 bg-[#d9d9d9] text-[#1e1e1e] placeholder-[#8a8a8a] font-bold text-lg px-4 py-2.5 rounded-full focus:outline-none focus:ring-2 focus:ring-black/40 shadow-inner"
+            className="w-[150px] flex-none bg-[#d9d9d9] text-[#1e1e1e] placeholder-[#8a8a8a] font-bold text-lg px-4 py-2.5 rounded-full focus:outline-none focus:ring-2 focus:ring-black/40 shadow-inner text-center"
           />
           <span className="font-brand font-black text-3xl shrink-0">
             のか

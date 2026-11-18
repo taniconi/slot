@@ -27,32 +27,17 @@ const LS_OWNED_KONOYAROS = 'konoyaro_mock_owned_konoyaros';
 const LS_HISTORIES = 'konoyaro_mock_histories';
 const LS_ACCESS_CODES = 'konoyaro_mock_access_codes';
 
-// Initialize mock storage with initial sample data if empty
+// Initialize mock storage if empty.
+// Words and quotes start EMPTY: only items actually registered by users appear.
 function initMockData() {
   if (!localStorage.getItem(LS_ACCESS_CODES)) {
     localStorage.setItem(LS_ACCESS_CODES, JSON.stringify(INITIAL_ACCESS_CODES));
   }
   if (!localStorage.getItem(LS_WORDS)) {
-    localStorage.setItem(
-      LS_WORDS,
-      JSON.stringify([
-        { word: 'バカ', createdBy: 'system', createdAt: Date.now() },
-        { word: 'アホ', createdBy: 'system', createdAt: Date.now() },
-        { word: 'ハゲ', createdBy: 'system', createdAt: Date.now() },
-        { word: '神', createdBy: 'system', createdAt: Date.now() },
-        { word: '天才', createdBy: 'system', createdAt: Date.now() },
-        { word: 'ゆちゆち', createdBy: 'system', createdAt: Date.now() },
-      ])
-    );
+    localStorage.setItem(LS_WORDS, JSON.stringify([]));
   }
   if (!localStorage.getItem(LS_QUOTES)) {
-    localStorage.setItem(
-      LS_QUOTES,
-      JSON.stringify([
-        { text: '諦めたらそこで試合終了ですよ', createdBy: 'system', createdAt: Date.now() },
-        { text: '努力は必ず報われる', createdBy: 'system', createdAt: Date.now() },
-      ])
-    );
+    localStorage.setItem(LS_QUOTES, JSON.stringify([]));
   }
   if (!localStorage.getItem(LS_USERS)) {
     localStorage.setItem(LS_USERS, JSON.stringify({}));
@@ -96,53 +81,166 @@ export async function validateAccessCode(code: string): Promise<boolean> {
   return validCodes.includes(normalizedCode);
 }
 
-// 2. User Login / Registration
-export async function loginOrRegisterUser(username: string): Promise<User> {
+// 2. User Registration / Login with password
+// Passwords are never stored in plain text: a SHA-256 hash is stored instead.
+export async function hashPassword(password: string): Promise<string> {
+  try {
+    const data = new TextEncoder().encode(`konoyaro::${password}`);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch {
+    // Fallback (non-secure contexts): simple FNV-1a hash, still not plain text
+    const s = `konoyaro::${password}`;
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < s.length; i++) {
+      h1 = Math.imul(h1 ^ s.charCodeAt(i), 0x01000193);
+      h2 = Math.imul(h2 + s.charCodeAt(i), 0x85ebca6b);
+    }
+    return `fnv${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}`;
+  }
+}
+
+function validateUsername(username: string): string {
   const cleanUsername = username.trim();
   if (!/^[a-zA-Z0-9]{1,8}$/.test(cleanUsername)) {
     throw new Error('ユーザー名は半角英数字8文字以内で入力してください');
   }
+  return cleanUsername;
+}
 
+function validatePassword(password: string): void {
+  if (!password || password.length < 4) {
+    throw new Error('パスワードは4文字以上で設定してください');
+  }
+  if (password.length > 32) {
+    throw new Error('パスワードは32文字以内で設定してください');
+  }
+}
+
+// Check whether a username is already taken (duplicate usernames are prohibited)
+export async function checkUsernameExists(
+  username: string
+): Promise<{ exists: boolean; hasPassword: boolean }> {
+  const cleanUsername = username.trim();
   if (isFirebaseConfigured && db) {
     try {
-      const userDocRef = doc(db, 'users', cleanUsername);
-      const userSnap = await getDoc(userDocRef);
-      if (userSnap.exists()) {
-        const data = userSnap.data();
-        return {
-          username: cleanUsername,
-          tp: data.tp ?? 0,
-          createdAt: data.createdAt ?? new Date().toISOString(),
-        };
-      } else {
-        const newUser: User = {
-          username: cleanUsername,
-          tp: 0,
-          createdAt: serverTimestamp(),
-        };
-        await setDoc(userDocRef, newUser);
-        return {
-          username: cleanUsername,
-          tp: 0,
-          createdAt: new Date().toISOString(),
-        };
+      const snap = await getDoc(doc(db, 'users', cleanUsername));
+      if (snap.exists()) {
+        return { exists: true, hasPassword: Boolean(snap.data().passwordHash) };
       }
+      return { exists: false, hasPassword: false };
     } catch (e) {
-      console.warn('Error in Firestore user auth, falling back to mock:', e);
+      console.warn('Error checking username in Firestore:', e);
     }
+  }
+  const users = JSON.parse(localStorage.getItem(LS_USERS) || '{}');
+  const u = users[cleanUsername];
+  return { exists: Boolean(u), hasPassword: Boolean(u?.passwordHash) };
+}
+
+// Register a NEW user. Throws if the username is already taken.
+export async function registerUser(username: string, password: string): Promise<User> {
+  const cleanUsername = validateUsername(username);
+  validatePassword(password);
+  const passwordHash = await hashPassword(password);
+
+  if (isFirebaseConfigured && db) {
+    const userDocRef = doc(db, 'users', cleanUsername);
+    const existing = await getDoc(userDocRef);
+    if (existing.exists()) {
+      throw new Error('このユーザー名は既に使われています');
+    }
+    await setDoc(userDocRef, {
+      username: cleanUsername,
+      tp: 0,
+      passwordHash,
+      createdAt: serverTimestamp(),
+    });
+    return { username: cleanUsername, tp: 0, createdAt: new Date().toISOString(), hasPassword: true };
   }
 
   // Mock mode
   const users = JSON.parse(localStorage.getItem(LS_USERS) || '{}');
-  if (!users[cleanUsername]) {
-    users[cleanUsername] = {
-      username: cleanUsername,
-      tp: 0,
-      createdAt: new Date().toISOString(),
-    };
-    localStorage.setItem(LS_USERS, JSON.stringify(users));
+  if (users[cleanUsername]) {
+    throw new Error('このユーザー名は既に使われています');
   }
-  return users[cleanUsername];
+  users[cleanUsername] = {
+    username: cleanUsername,
+    tp: 0,
+    passwordHash,
+    createdAt: new Date().toISOString(),
+  };
+  localStorage.setItem(LS_USERS, JSON.stringify(users));
+  const { passwordHash: _omit, ...publicUser } = users[cleanUsername];
+  return { ...publicUser, hasPassword: true };
+}
+
+// Log in an EXISTING user by verifying the password.
+// Users created before passwords existed (no passwordHash) set their password on first login.
+export async function loginUser(username: string, password: string): Promise<User> {
+  const cleanUsername = validateUsername(username);
+  if (!password) {
+    throw new Error('パスワードを入力してください');
+  }
+
+  if (isFirebaseConfigured && db) {
+    const userDocRef = doc(db, 'users', cleanUsername);
+    const snap = await getDoc(userDocRef);
+    if (!snap.exists()) {
+      throw new Error('ユーザーが存在しません。新規登録してください');
+    }
+    const data = snap.data();
+    if (!data.passwordHash) {
+      // Migration: no password set yet -> set it now
+      validatePassword(password);
+      const passwordHash = await hashPassword(password);
+      await updateDoc(userDocRef, { passwordHash });
+    } else {
+      const passwordHash = await hashPassword(password);
+      if (passwordHash !== data.passwordHash) {
+        throw new Error('パスワードが違います');
+      }
+    }
+    return {
+      username: cleanUsername,
+      tp: data.tp ?? 0,
+      createdAt: data.createdAt ?? new Date().toISOString(),
+      hasPassword: true,
+    };
+  }
+
+  // Mock mode
+  const users = JSON.parse(localStorage.getItem(LS_USERS) || '{}');
+  const u = users[cleanUsername];
+  if (!u) {
+    throw new Error('ユーザーが存在しません。新規登録してください');
+  }
+  if (!u.passwordHash) {
+    validatePassword(password);
+    u.passwordHash = await hashPassword(password);
+    localStorage.setItem(LS_USERS, JSON.stringify(users));
+  } else {
+    const passwordHash = await hashPassword(password);
+    if (passwordHash !== u.passwordHash) {
+      throw new Error('パスワードが違います');
+    }
+  }
+  const { passwordHash: _omit, ...publicUser } = u;
+  return { ...publicUser, hasPassword: true };
+}
+
+// Backward-compatible wrapper (kept for older callers)
+export async function loginOrRegisterUser(username: string, password?: string): Promise<User> {
+  const { exists } = await checkUsernameExists(username);
+  if (exists) {
+    if (!password) throw new Error('パスワードを入力してください');
+    return loginUser(username, password);
+  }
+  if (!password) throw new Error('新規登録にはパスワードの設定が必要です');
+  return registerUser(username, password);
 }
 
 // 3. Get User Data
@@ -157,6 +255,7 @@ export async function getUserData(username: string): Promise<User | null> {
           username,
           tp: data.tp ?? 0,
           createdAt: data.createdAt,
+          hasPassword: Boolean(data.passwordHash),
         };
       }
     } catch (e) {
@@ -166,7 +265,10 @@ export async function getUserData(username: string): Promise<User | null> {
 
   // Mock mode
   const users = JSON.parse(localStorage.getItem(LS_USERS) || '{}');
-  return users[username] || null;
+  const u = users[username];
+  if (!u) return null;
+  const { passwordHash: _omit, ...publicUser } = u;
+  return { ...publicUser, hasPassword: Boolean(u.passwordHash) };
 }
 
 // 4. Check if Konoyaro Word Exists
@@ -348,10 +450,12 @@ export async function getAllKonoyaroWords(): Promise<string[]> {
   if (isFirebaseConfigured && db) {
     try {
       const snap = await getDocs(collection(db, 'konoyaro_words'));
-      const list = snap.docs.map((d) => d.data().word).filter(Boolean);
-      if (list.length > 0) return list;
+      // Return exactly what is registered in Firestore (empty means empty:
+      // never fall back to pre-made sample words)
+      return snap.docs.map((d) => d.data().word).filter(Boolean);
     } catch (e) {
       console.warn('Error getting words from Firestore:', e);
+      return [];
     }
   }
 
@@ -819,7 +923,9 @@ export async function seedFirestoreDatabase(): Promise<{ success: boolean; messa
   }
 
   try {
-    // 1. Seed access codes
+    // Seed ONLY the access codes needed for login.
+    // Words and quotes are NOT pre-created: the database contains
+    // only items that users actually register.
     for (const code of INITIAL_ACCESS_CODES) {
       await setDoc(doc(db, 'access_codes', code), {
         code,
@@ -828,41 +934,9 @@ export async function seedFirestoreDatabase(): Promise<{ success: boolean; messa
       });
     }
 
-    // 2. Seed initial words
-    const sampleWords = ['バカ', 'アホ', 'ハゲ', '神', '天才', 'ゆちゆち'];
-    for (const word of sampleWords) {
-      const q = query(collection(db, 'konoyaro_words'), where('word', '==', word));
-      const snap = await getDocs(q);
-      if (snap.empty) {
-        await addDoc(collection(db, 'konoyaro_words'), {
-          word,
-          createdBy: 'system',
-          createdAt: serverTimestamp(),
-        });
-      }
-    }
-
-    // 3. Seed initial quotes
-    const sampleQuotes = [
-      '諦めたらそこで試合終了ですよ',
-      '努力は必ず報われる',
-      '事件は会議室で起きてるんじゃない',
-    ];
-    for (const text of sampleQuotes) {
-      const q = query(collection(db, 'quotes'), where('text', '==', text));
-      const snap = await getDocs(q);
-      if (snap.empty) {
-        await addDoc(collection(db, 'quotes'), {
-          text,
-          createdBy: 'system',
-          createdAt: serverTimestamp(),
-        });
-      }
-    }
-
     return {
       success: true,
-      message: 'Firestore initialized with access codes and sample words/quotes!',
+      message: 'Firestore initialized with access codes only. Words/quotes start empty.',
     };
   } catch (error: any) {
     return {
